@@ -6,7 +6,7 @@
     </div>
 
     <div class="toolbar">
-      <button class="btn btn-primary" @click="showAddModal = true">新增消息</button>
+      <button class="btn btn-primary" @click="openAddNews">新增消息</button>
     </div>
 
     <div class="news-list">
@@ -27,7 +27,7 @@
       </div>
     </div>
 
-    <div v-if="showAddModal" class="modal-overlay" @click.self="closeModal">
+    <div v-if="showAddModal" class="modal-overlay">
       <div class="modal">
         <h3>{{ editingNews ? '編輯消息' : '新增消息' }}</h3>
         <form @submit.prevent="saveNews">
@@ -40,8 +40,10 @@
             <input type="date" v-model="form.date" required />
           </div>
           <div class="form-group">
-            <label>圖片網址</label>
-            <input type="text" v-model="form.image" placeholder="/images/xxx.jpg" required />
+            <label>消息圖片</label>
+            <input type="file" accept="image/jpeg,image/png,image/webp" @change="handleImageChange" :required="!editingNews" />
+            <small class="upload-hint">支援 JPG、PNG、WebP，檔案大小不可超過 5 MB。</small>
+            <img v-if="imagePreview" :src="imagePreview" alt="消息圖片預覽" class="image-preview" />
           </div>
           <div class="form-group">
             <label>內容描述</label>
@@ -55,7 +57,7 @@
             </select>
           </div>
           <div class="modal-actions">
-            <button type="button" class="btn btn-secondary" @click="closeModal">取消</button>
+            <button type="button" class="btn btn-secondary" @click="requestCloseModal">取消</button>
             <button type="submit" class="btn btn-primary">{{ editingNews ? '更新' : '發布' }}</button>
           </div>
         </form>
@@ -65,7 +67,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { api } from '../../services/api'
 
 const news = ref([])
@@ -73,10 +75,11 @@ const loadNews = async () => {
   news.value = await api('/news')
   news.value.forEach(n => { n.statusText = n.status === 'published' ? '發布' : '草稿' })
 }
-onMounted(loadNews)
-
 const showAddModal = ref(false)
 const editingNews = ref(null)
+const originalForm = ref('')
+const imageFile = ref(null)
+const imagePreview = ref('')
 
 const form = ref({
   title: '',
@@ -85,25 +88,82 @@ const form = ref({
   desc: '',
   status: 'published'
 })
+const resetForm = () => ({ title: '', date: '', image: '', desc: '', status: 'published' })
+const markFormPristine = () => { originalForm.value = JSON.stringify(form.value) }
+const isFormDirty = () => imageFile.value !== null || JSON.stringify(form.value) !== originalForm.value
+
+const handleKeydown = (event) => {
+  if (event.key === 'Escape' && showAddModal.value) requestCloseModal()
+}
+onMounted(() => {
+  loadNews()
+  window.addEventListener('keydown', handleKeydown)
+})
+onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
 const saveNews = async () => {
-  const body = { title: form.value.title, published_at: form.value.date, image_url: form.value.image, content: form.value.desc, status: form.value.status }
-  if (editingNews.value) await api(`/news/${editingNews.value.id}`, { method: 'PUT', body: JSON.stringify(body) })
-  else await api('/news', { method: 'POST', body: JSON.stringify(body) })
-  await loadNews()
-  closeModal()
+  try {
+    let imageUrl = form.value.image
+    if (imageFile.value) {
+      const data = new FormData()
+      data.append('image', imageFile.value)
+      const response = await fetch('/api/uploads/news', { method: 'POST', body: data })
+      const uploaded = await response.json()
+      if (!response.ok) throw new Error(uploaded.message || '圖片上傳失敗')
+      imageUrl = uploaded.image_url
+    }
+    const body = { title: form.value.title, published_at: form.value.date, image_url: imageUrl, content: form.value.desc, status: form.value.status }
+    if (editingNews.value) await api(`/news/${editingNews.value.id}`, { method: 'PUT', body: JSON.stringify(body) })
+    else await api('/news', { method: 'POST', body: JSON.stringify(body) })
+    await loadNews()
+    closeModal()
+  } catch (error) {
+    alert(error.message)
+  }
 }
 
 const closeModal = () => {
   showAddModal.value = false
   editingNews.value = null
-  form.value = { title: '', date: '', image: '', desc: '', status: 'published' }
+  imageFile.value = null
+  imagePreview.value = ''
+  form.value = resetForm()
+  markFormPristine()
+}
+
+const requestCloseModal = () => {
+  if (isFormDirty() && !confirm('尚未儲存消息資料，確定要離開嗎？')) return
+  closeModal()
+}
+
+const openAddNews = () => {
+  editingNews.value = null
+  imageFile.value = null
+  imagePreview.value = ''
+  form.value = resetForm()
+  markFormPristine()
+  showAddModal.value = true
 }
 
 const editNews = (n) => {
   editingNews.value = n
-  form.value = { ...n }
+  form.value = { title: n.title, date: n.date, image: n.image, desc: n.desc, status: n.status }
+  imageFile.value = null
+  imagePreview.value = n.image || ''
+  markFormPristine()
   showAddModal.value = true
+}
+
+const handleImageChange = (event) => {
+  const file = event.target.files?.[0]
+  if (!file) return
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
+    alert('請選擇 JPG、PNG 或 WebP 圖片，且大小不可超過 5 MB。')
+    event.target.value = ''
+    return
+  }
+  imageFile.value = file
+  imagePreview.value = URL.createObjectURL(file)
 }
 
 const deleteNews = async (id) => {
@@ -324,6 +384,23 @@ const deleteNews = async (id) => {
   outline: none;
   border-color: #35c1d0;
   box-shadow: 0 0 0 3px rgba(53, 193, 208, 0.15);
+}
+
+.upload-hint {
+  display: block;
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.image-preview {
+  display: block;
+  width: 180px;
+  height: 120px;
+  margin-top: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  object-fit: cover;
 }
 
 .modal-actions {

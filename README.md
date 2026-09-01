@@ -29,5 +29,6 @@ npm run dev
 
 - `POST /api/auth/register`、`POST /api/auth/login`
 - `/api/members`、`/api/products`、`/api/news`：支援 `GET`、`POST`、`PUT /:id`、`DELETE /:id`
+- `POST /api/uploads/products`：上傳商品圖片；支援 JPG、PNG、WebP，最多 5 MB。
 
 目前是本機開發用範例。上線前必須補上管理者登入驗證與權限控管，避免管理 API 被未授權使用者呼叫。

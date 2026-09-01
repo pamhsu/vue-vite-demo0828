@@ -7,7 +7,7 @@
 
     <div class="toolbar">
       <input type="text" placeholder="搜尋會員..." class="search-input" />
-      <button class="btn btn-primary">新增會員</button>
+      <button class="btn btn-primary" @click="openAddMember">新增會員</button>
     </div>
 
     <div class="table-wrapper">
@@ -39,19 +39,101 @@
         </tbody>
       </table>
     </div>
+
+    <div v-if="showAddModal" class="modal-overlay">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="add-member-title">
+        <h3 id="add-member-title">新增會員</h3>
+        <form @submit.prevent="saveMember">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="member-name">姓名</label>
+              <input id="member-name" v-model.trim="form.name" type="text" maxlength="100" required />
+            </div>
+            <div class="form-group">
+              <label for="member-phone">電話</label>
+              <input id="member-phone" v-model.trim="form.phone" type="tel" maxlength="30" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="member-email">Email</label>
+            <input id="member-email" v-model.trim="form.email" type="email" required />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="member-password">密碼</label>
+              <input id="member-password" v-model="form.password" type="password" minlength="6" required />
+              <small>至少 6 碼</small>
+            </div>
+            <div class="form-group">
+              <label for="member-status">狀態</label>
+              <select id="member-status" v-model="form.status">
+                <option value="active">啟用</option>
+                <option value="inactive">停用</option>
+              </select>
+            </div>
+          </div>
+          <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" @click="closeAddMember">取消</button>
+            <button type="submit" class="btn btn-primary" :disabled="isSaving">{{ isSaving ? '儲存中…' : '新增' }}</button>
+          </div>
+        </form>
+      </div>
+    </div>
   </section>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { api } from '../../services/api'
 
 const members = ref([])
+const showAddModal = ref(false)
+const isSaving = ref(false)
+const formError = ref('')
+const emptyForm = () => ({ name: '', email: '', phone: '', password: '', status: 'active' })
+const form = ref(emptyForm())
+const isFormDirty = () => Object.entries(form.value).some(([key, value]) => value !== emptyForm()[key])
+
 const loadMembers = async () => {
   members.value = await api('/members')
   members.value.forEach(m => { m.statusText = m.status === 'active' ? '啟用' : '停用'; m.createdAt = new Date(m.createdAt).toLocaleDateString('zh-TW') })
 }
-onMounted(loadMembers)
+const handleKeydown = (event) => {
+  if (event.key === 'Escape' && showAddModal.value) closeAddMember()
+}
+onMounted(() => {
+  loadMembers()
+  window.addEventListener('keydown', handleKeydown)
+})
+onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
+
+const openAddMember = () => {
+  form.value = emptyForm()
+  formError.value = ''
+  showAddModal.value = true
+}
+
+const closeAddMember = () => {
+  if (isSaving.value) return
+  if (isFormDirty() && !confirm('尚未儲存新增會員資料，確定要離開嗎？')) return
+  showAddModal.value = false
+}
+
+const saveMember = async () => {
+  formError.value = ''
+  isSaving.value = true
+  try {
+    await api('/members', { method: 'POST', body: JSON.stringify(form.value) })
+    await loadMembers()
+    showAddModal.value = false
+  } catch (error) {
+    formError.value = error.message || '新增會員失敗'
+  } finally {
+    isSaving.value = false
+  }
+}
+
 const toggleStatus = async (member) => {
   await api(`/members/${member.id}`, { method: 'PUT', body: JSON.stringify({ ...member, status: member.status === 'active' ? 'inactive' : 'active' }) })
   await loadMembers()
@@ -203,5 +285,112 @@ const deleteMember = async (id) => {
 
 .btn-primary:hover {
   background: #2aaeb9;
+}
+
+.btn-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.modal {
+  width: 100%;
+  max-width: 520px;
+  padding: 28px;
+  background: white;
+  border-radius: 14px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
+}
+
+.modal h3 {
+  margin: 0 0 20px;
+  color: #273746;
+  font-size: 20px;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.form-group {
+  margin-bottom: 18px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 6px;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.form-group input,
+.form-group select {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font: inherit;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+  outline: none;
+  border-color: #35c1d0;
+  box-shadow: 0 0 0 3px rgba(53, 193, 208, 0.15);
+}
+
+.form-group small {
+  display: block;
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.form-error {
+  margin: 0 0 16px;
+  color: #dc2626;
+  font-size: 14px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.btn-secondary {
+  height: 42px;
+  padding: 0 20px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: white;
+  color: #475569;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.btn-secondary:hover {
+  background: #f8fafc;
+}
+
+@media (max-width: 560px) {
+  .form-row {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
 }
 </style>

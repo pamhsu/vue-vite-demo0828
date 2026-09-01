@@ -16,7 +16,7 @@
         </select>
         <input type="text" v-model="keyword" placeholder="搜尋商品名稱..." class="search-input" />
       </div>
-      <button class="btn btn-primary" @click="showAddModal = true">新增商品</button>
+      <button class="btn btn-primary" @click="openAddProduct">新增商品</button>
     </div>
 
     <div class="table-wrapper">
@@ -56,7 +56,7 @@
     </div>
 
     <!-- Add/Edit Modal -->
-    <div v-if="showAddModal" class="modal-overlay" @click.self="showAddModal = false">
+    <div v-if="showAddModal" class="modal-overlay">
       <div class="modal">
         <h3>{{ editingProduct ? '編輯商品' : '新增商品' }}</h3>
         <form @submit.prevent="saveProduct">
@@ -90,8 +90,10 @@
             </div>
           </div>
           <div class="form-group">
-            <label>圖片網址</label>
-            <input type="text" v-model="form.image" placeholder="/images/xxx.jpg" />
+            <label>商品圖片</label>
+            <input type="file" accept="image/jpeg,image/png,image/webp" @change="handleImageChange" />
+            <small class="upload-hint">支援 JPG、PNG、WebP，檔案大小不可超過 5 MB。</small>
+            <img v-if="imagePreview" :src="imagePreview" alt="商品圖片預覽" class="image-preview" />
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -103,8 +105,8 @@
             </div>
           </div>
           <div class="modal-actions">
-            <button type="button" class="btn btn-secondary" @click="closeModal">取消</button>
-            <button type="submit" class="btn btn-primary">{{ editingProduct ? '更新' : '新增' }}</button>
+            <button type="button" class="btn btn-secondary" @click="requestCloseModal">取消</button>
+            <button type="submit" class="btn btn-primary" :disabled="isSaving">{{ isSaving ? '儲存中…' : editingProduct ? '更新' : '新增' }}</button>
           </div>
         </form>
       </div>
@@ -113,13 +115,17 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../../services/api'
 
 const selectedCategory = ref('')
 const keyword = ref('')
 const showAddModal = ref(false)
 const editingProduct = ref(null)
+const imageFile = ref(null)
+const imagePreview = ref('')
+const isSaving = ref(false)
+const originalForm = ref('')
 
 const form = ref({
   name: '',
@@ -130,36 +136,95 @@ const form = ref({
   image: '',
   status: 'active'
 })
+const resetForm = () => ({ name: '', category: '經典口味', desc: '', price: 0, sort: 0, image: '', status: 'active' })
+const markFormPristine = () => { originalForm.value = JSON.stringify(form.value) }
+const isFormDirty = () => imageFile.value !== null || JSON.stringify(form.value) !== originalForm.value
 
 const products = ref([])
 const loadProducts = async () => {
   products.value = await api('/products')
   products.value.forEach(p => { p.statusText = p.status === 'active' ? '上架' : '下架' })
 }
-onMounted(loadProducts)
+const handleKeydown = (event) => {
+  if (event.key === 'Escape' && showAddModal.value) requestCloseModal()
+}
+onMounted(() => {
+  loadProducts()
+  window.addEventListener('keydown', handleKeydown)
+})
+onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
 const filteredProducts = computed(() => {
   return products.value.filter(p => (!selectedCategory.value || p.category === selectedCategory.value) && (!keyword.value || p.name.includes(keyword.value)))
 })
 
 const saveProduct = async () => {
-  const body = { name: form.value.name, category: form.value.category, description: form.value.desc, price: form.value.price, image_url: form.value.image, status: form.value.status, sort_order: form.value.sort }
-  if (editingProduct.value) await api(`/products/${editingProduct.value.id}`, { method: 'PUT', body: JSON.stringify(body) })
-  else await api('/products', { method: 'POST', body: JSON.stringify(body) })
-  await loadProducts()
-  closeModal()
+  isSaving.value = true
+  try {
+    let imageUrl = form.value.image
+    if (imageFile.value) {
+      const data = new FormData()
+      data.append('image', imageFile.value)
+      const response = await fetch('/api/uploads/products', { method: 'POST', body: data })
+      const uploaded = await response.json()
+      if (!response.ok) throw new Error(uploaded.message || '圖片上傳失敗')
+      imageUrl = uploaded.image_url
+    }
+
+    const body = { name: form.value.name, category: form.value.category, description: form.value.desc, price: form.value.price, image_url: imageUrl, status: form.value.status, sort_order: form.value.sort }
+    if (editingProduct.value) await api(`/products/${editingProduct.value.id}`, { method: 'PUT', body: JSON.stringify(body) })
+    else await api('/products', { method: 'POST', body: JSON.stringify(body) })
+    await loadProducts()
+    closeModal()
+  } catch (error) {
+    alert(error.message)
+  } finally {
+    isSaving.value = false
+  }
 }
 
 const closeModal = () => {
   showAddModal.value = false
   editingProduct.value = null
-  form.value = { name: '', category: '經典口味', desc: '', price: 0, sort: 0, image: '', status: 'active' }
+  imageFile.value = null
+  imagePreview.value = ''
+  form.value = resetForm()
+  markFormPristine()
+}
+
+const requestCloseModal = () => {
+  if (isSaving.value) return
+  if (isFormDirty() && !confirm('尚未儲存商品資料，確定要離開嗎？')) return
+  closeModal()
+}
+
+const openAddProduct = () => {
+  editingProduct.value = null
+  imageFile.value = null
+  imagePreview.value = ''
+  form.value = resetForm()
+  markFormPristine()
+  showAddModal.value = true
 }
 
 const editProduct = (p) => {
   editingProduct.value = p
-  form.value = { ...p }
+  form.value = { name: p.name, category: p.category, desc: p.desc, price: p.price, sort: p.sort, image: p.image, status: p.status }
+  imageFile.value = null
+  imagePreview.value = p.image || ''
+  markFormPristine()
   showAddModal.value = true
+}
+const handleImageChange = (event) => {
+  const file = event.target.files?.[0]
+  if (!file) return
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
+    alert('請選擇 JPG、PNG 或 WebP 圖片，且大小不可超過 5 MB。')
+    event.target.value = ''
+    return
+  }
+  imageFile.value = file
+  imagePreview.value = URL.createObjectURL(file)
 }
 const deleteProduct = async (id) => {
   if (!confirm('確定要刪除這項商品嗎？')) return
@@ -400,6 +465,22 @@ const deleteProduct = async (id) => {
   outline: none;
   border-color: #35c1d0;
   box-shadow: 0 0 0 3px rgba(53, 193, 208, 0.15);
+}
+
+.upload-hint {
+  display: block;
+  margin-top: 6px;
+  color: #64748b;
+}
+
+.image-preview {
+  display: block;
+  width: 140px;
+  height: 100px;
+  margin-top: 12px;
+  object-fit: cover;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
 }
 
 .modal-actions {

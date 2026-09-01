@@ -2,7 +2,11 @@ import 'dotenv/config'
 import bcrypt from 'bcryptjs'
 import cors from 'cors'
 import express from 'express'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import mysql from 'mysql2/promise'
+import multer from 'multer'
 
 const required = ['DB_HOST', 'DB_NAME', 'DB_USER']
 const missing = required.filter((key) => !process.env[key])
@@ -19,8 +23,37 @@ const db = mysql.createPool({
 })
 
 const app = express()
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const productUploadDir = path.join(projectRoot, 'public', 'uploads', 'products')
+const newsUploadDir = path.join(projectRoot, 'public', 'uploads', 'news')
+fs.mkdirSync(productUploadDir, { recursive: true })
+fs.mkdirSync(newsUploadDir, { recursive: true })
+const createImageUpload = (destination) => multer({
+  storage: multer.diskStorage({
+    destination,
+    filename: (_req, file, done) => {
+      const extension = path.extname(file.originalname).toLowerCase()
+      done(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}${extension}`)
+    }
+  }),
+  fileFilter: (_req, file, done) => done(null, ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)),
+  limits: { fileSize: 5 * 1024 * 1024 }
+})
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: productUploadDir,
+    filename: (_req, file, done) => {
+      const extension = path.extname(file.originalname).toLowerCase()
+      done(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}${extension}`)
+    }
+  }),
+  fileFilter: (_req, file, done) => done(null, ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)),
+  limits: { fileSize: 5 * 1024 * 1024 }
+})
+const newsUpload = createImageUpload(newsUploadDir)
 app.use(cors())
 app.use(express.json())
+app.use('/uploads', express.static(path.join(projectRoot, 'public', 'uploads')))
 
 const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)
 const pick = (body, fields) => Object.fromEntries(fields.map((field) => [field, body[field]]))
@@ -46,6 +79,34 @@ app.post('/api/auth/login', asyncRoute(async (req, res) => {
   if (!member || member.status !== 'active' || !(await bcrypt.compare(req.body.password || '', member.password_hash))) return res.status(401).json({ message: '帳號或密碼錯誤' })
   res.json({ member: { id: member.id, name: member.name, email: member.email } })
 }))
+
+app.post('/api/members', asyncRoute(async (req, res) => {
+  const { name, email, password, phone, status = 'active' } = req.body
+  if (!name?.trim() || !email?.trim() || !password || password.length < 6) {
+    return res.status(400).json({ message: '請填寫姓名、Email 與至少 6 碼的密碼' })
+  }
+  if (!['active', 'inactive'].includes(status)) return res.status(400).json({ message: '會員狀態不正確' })
+
+  const [exists] = await db.query('SELECT id FROM members WHERE email = ?', [email.trim()])
+  if (exists.length) return res.status(409).json({ message: '此 Email 已被註冊' })
+
+  const passwordHash = await bcrypt.hash(password, 12)
+  const [result] = await db.query(
+    'INSERT INTO members (name, email, password_hash, phone, status) VALUES (?, ?, ?, ?, ?)',
+    [name.trim(), email.trim(), passwordHash, phone?.trim() || null, status]
+  )
+  res.status(201).json({ id: result.insertId })
+}))
+
+app.post('/api/uploads/products', upload.single('image'), (req, res) => {
+  if (!req.file) return res.status(400).json({ message: '請選擇 JPG、PNG 或 WebP 圖片（最多 5 MB）' })
+  res.status(201).json({ image_url: `/uploads/products/${req.file.filename}` })
+})
+
+app.post('/api/uploads/news', newsUpload.single('image'), (req, res) => {
+  if (!req.file) return res.status(400).json({ message: '請選擇 JPG、PNG 或 WebP 圖片（最多 5 MB）' })
+  res.status(201).json({ image_url: `/uploads/news/${req.file.filename}` })
+})
 
 const resources = {
   members: { table: 'members', columns: ['name', 'email', 'phone', 'status'], select: 'id, name, email, phone, status, created_at AS createdAt' },
@@ -82,6 +143,7 @@ for (const [route, config] of Object.entries(resources)) {
 
 app.use((error, _req, res, _next) => {
   console.error(error)
+  if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ message: '圖片不可超過 5 MB' })
   res.status(500).json({ message: '伺服器或資料庫發生錯誤' })
 })
 
