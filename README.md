@@ -32,3 +32,11 @@ npm run dev
 - `POST /api/uploads/products`：上傳商品圖片；支援 JPG、PNG、WebP，最多 5 MB。
 
 目前是本機開發用範例。上線前必須補上管理者登入驗證與權限控管，避免管理 API 被未授權使用者呼叫。
+# 快速啟動（Windows）
+
+從 GitHub 下載或 clone 專案後，直接雙擊 `start-fatta.bat`。
+
+- 第一次會自動執行 `npm ci` 安裝套件；之後偵測到 `node_modules` 便不會重裝。
+- 它會另開兩個視窗，分別執行後端 API 與 Vite 前端。
+- 新電腦仍須先安裝 [Node.js LTS](https://nodejs.org/) 與 MySQL，啟動 MySQL，並匯入 `database/schema.sql` 建立 `vue_store` 資料庫。
+- 批次檔首次執行會由 `.env.example` 建立 `.env`；請確認其中的 MySQL 帳號、密碼與連線資訊正確。
