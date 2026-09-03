@@ -1,4 +1,6 @@
 <script>
+import { api } from '../services/api'
+
 export default {
   data() {
     return {
@@ -9,29 +11,8 @@ export default {
         { src: '/images/home3.png', alt: '披薩圖片 3' }
       ],
       timer: null,
-      newsList: [
-        {
-          id: 1,
-          image: '/images/onsale1.jpg',
-          year: '2026',
-          date: '08/10',
-          title: '新品上市：雙心XO海鮮披薩'
-        },
-        {
-          id: 2,
-          image: '/images/onsale2.jpg',
-          year: '2026',
-          date: '08/05',
-          title: '逢甲店開幕慶'
-        },
-        {
-          id: 3,
-          image: '/images/onsale3.jpg',
-          year: '2026',
-          date: '07/28',
-          title: '超值199元活動'
-        }
-      ]
+      newsList: [],
+      newsError: ''
     }
   },
   methods: {
@@ -48,10 +29,25 @@ export default {
     resetTimer() {
       clearInterval(this.timer)
       this.timer = setInterval(this.next, 3000)
+    },
+    async loadNews() {
+      try {
+        const news = await api('/news?status=published')
+        this.newsList = news
+          .sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id))
+          .slice(0, 3)
+          .map((item) => {
+            const [year, month, day] = String(item.date).slice(0, 10).split('-')
+            return { ...item, year, date: month && day ? `${month}/${day}` : '' }
+          })
+      } catch (error) {
+        this.newsError = '目前無法載入最新消息，請稍後再試。'
+      }
     }
   },
   mounted() {
     this.timer = setInterval(this.next, 3000)
+    this.loadNews()
   },
   beforeUnmount() {
     clearInterval(this.timer)
@@ -119,6 +115,7 @@ export default {
           <h3 class="news-card-title">{{ news.title }}</h3>
         </div>
       </div>
+      <p v-if="newsError" class="news-error">{{ newsError }}</p>
     </section>
   </main>
 </template>
@@ -285,6 +282,12 @@ export default {
   grid-template-columns: repeat(3, 1fr);
   gap: 18px;
   width: 100%;
+}
+
+.news-error {
+  margin: 20px 0 0;
+  color: #8a6d3b;
+  text-align: center;
 }
 
 .news-card {

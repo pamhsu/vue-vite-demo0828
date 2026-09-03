@@ -111,7 +111,7 @@ app.post('/api/uploads/news', newsUpload.single('image'), (req, res) => {
 const resources = {
   members: { table: 'members', columns: ['name', 'email', 'phone', 'status'], select: 'id, name, email, phone, status, created_at AS createdAt' },
   products: { table: 'products', columns: ['name', 'category', 'description', 'price', 'image_url', 'status', 'sort_order'], select: 'id, name, category, description AS `desc`, price, image_url AS image, status, sort_order AS sort, created_at AS createdAt' },
-  news: { table: 'news', columns: ['title', 'content', 'image_url', 'published_at', 'status'], select: 'id, title, content AS `desc`, image_url AS image, published_at AS date, status, created_at AS createdAt' }
+  news: { table: 'news', columns: ['title', 'content', 'image_url', 'published_at', 'status'], select: "id, title, content AS `desc`, image_url AS image, DATE_FORMAT(published_at, '%Y-%m-%d') AS date, status, created_at AS createdAt" }
 }
 
 for (const [route, config] of Object.entries(resources)) {
