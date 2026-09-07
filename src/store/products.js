@@ -27,7 +27,11 @@ export const usePrdtStore=
                             p.category===category
                     )
                 }
-            }            
+            },
+            categories:(state)=>{
+                const cats=state.prdt.map(p=>p.category).filter(Boolean)
+                return[...new Set(cats)]
+            }
         },
         actions:{
         async fetchProduct() {

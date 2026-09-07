@@ -1,5 +1,20 @@
 import { defineStore } from "pinia";
 
+const optionsKey = (options) => {
+  const labels = (Array.isArray(options) ? options : [])
+    .map(o => o && o.label)
+    .filter(Boolean)
+    .sort()
+    .join(',')
+  return labels
+}
+
+const optionsPrice = (options) => {
+  return (Array.isArray(options) ? options : []).reduce((sum, o) => sum + (Number(o.price) || 0), 0)
+}
+
+export { optionsPrice }
+
 export const useCartStore=
     defineStore("cart",{
         state:()=>({
@@ -10,7 +25,7 @@ export const useCartStore=
                 return state.cart.reduce((total,item)=>total+item.qty,0)
             },
             totalprice(state){
-                return state.cart.reduce((total,item)=>total+item.qty * item.price,0)
+                return state.cart.reduce((total,item)=>total+item.qty * ((Number(item.price)||0) + optionsPrice(item.options)),0)
             },
             totalItems(state){
                 return state.cart.length
@@ -21,14 +36,18 @@ export const useCartStore=
         },
         actions:{
             addToCart(prdt){
-                const exitem= this.cart.find(item=>item.id===prdt.id)
+                const addQty=prdt.qty||1
+                const key=`${prdt.id}|${optionsKey(prdt.options)}`
+                const exitem= this.cart.find(item=>item.__key===key)
 
                 if(exitem){
-                    exitem.qty++
+                    exitem.qty+=addQty
                 }else{
                     this.cart.push({
                         ...prdt,
-                        qty:1
+                        options: Array.isArray(prdt.options) ? prdt.options : [],
+                        qty:addQty,
+                        __key:key
                     })
                 }
 
@@ -38,20 +57,20 @@ export const useCartStore=
             savecart(){
                 localStorage.setItem("cart",JSON.stringify(this.cart))
             },
-            changqty(id,v1){
-                const item=this.cart.find(item=>item.id===id)
+            changqty(key,v1){
+                const item=this.cart.find(item=>item.__key===key)
                 if(!item){
                     return 
                 }
                 item.qty +=v1
                 if(item.qty<=0){
-                    this.removeFromCart(id)    
+                    this.removeFromCart(key)    
                     return 
                 }
                 this.savecart()
             },
-            removeFromCart(id){
-                this.cart=this.cart.filter(item=>item.id!==id)
+            removeFromCart(key){
+                this.cart=this.cart.filter(item=>item.__key!==key)
                 this.savecart()
             },
             clearcart(){

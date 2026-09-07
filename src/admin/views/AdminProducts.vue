@@ -90,6 +90,19 @@
             </div>
           </div>
           <div class="form-group">
+            <label>配料 / 特殊需求（選填）</label>
+            <div v-for="(opt, idx) in form.options" :key="idx" class="option-row">
+              <input type="text" v-model.trim="opt.label" placeholder="配料名稱（例如：加起司）" class="option-label" />
+              <div class="option-price-wrap">
+                <span class="option-plus">+NT$</span>
+                <input type="number" v-model.number="opt.price" min="0" class="option-price" placeholder="0" />
+              </div>
+              <button type="button" class="option-remove" @click="removeOption(idx)" title="刪除此配料">✕</button>
+            </div>
+            <button type="button" class="option-add" @click="addOption">＋ 新增配料 / 特殊需求</button>
+            <small class="upload-hint">顧客可複選多個配料，每個配料的加成價格會累加到結帳金額，例如：加起司 +30、芝心餅皮 +50、去醬 +0。</small>
+          </div>
+          <div class="form-group">
             <label>商品圖片</label>
             <input type="file" accept="image/jpeg,image/png,image/webp" @change="handleImageChange" />
             <small class="upload-hint">支援 JPG、PNG、WebP，檔案大小不可超過 5 MB。</small>
@@ -134,11 +147,25 @@ const form = ref({
   price: 0,
   sort: 0,
   image: '',
+  options: [],
   status: 'active'
 })
-const resetForm = () => ({ name: '', category: '經典口味', desc: '', price: 0, sort: 0, image: '', status: 'active' })
+const resetForm = () => ({ name: '', category: '經典口味', desc: '', price: 0, sort: 0, image: '', options: [], status: 'active' })
 const markFormPristine = () => { originalForm.value = JSON.stringify(form.value) }
 const isFormDirty = () => imageFile.value !== null || JSON.stringify(form.value) !== originalForm.value
+
+const parseOptions = (val) => {
+  if (Array.isArray(val)) return val.map(o => ({ label: o.label || '', price: Number(o.price) || 0 }))
+  if (!val) return []
+  try {
+    const parsed = JSON.parse(val)
+    return Array.isArray(parsed) ? parsed.map(o => ({ label: o.label || '', price: Number(o.price) || 0 })) : []
+  } catch (e) {
+    return []
+  }
+}
+const addOption = () => { form.value.options.push({ label: '', price: 0 }) }
+const removeOption = (idx) => { form.value.options.splice(idx, 1) }
 
 const products = ref([])
 const loadProducts = async () => {
@@ -171,7 +198,7 @@ const saveProduct = async () => {
       imageUrl = uploaded.image_url
     }
 
-    const body = { name: form.value.name, category: form.value.category, description: form.value.desc, price: form.value.price, image_url: imageUrl, status: form.value.status, sort_order: form.value.sort }
+    const body = { name: form.value.name, category: form.value.category, description: form.value.desc, price: form.value.price, image_url: imageUrl, options: form.value.options, status: form.value.status, sort_order: form.value.sort }
     if (editingProduct.value) await api(`/products/${editingProduct.value.id}`, { method: 'PUT', body: JSON.stringify(body) })
     else await api('/products', { method: 'POST', body: JSON.stringify(body) })
     await loadProducts()
@@ -209,7 +236,7 @@ const openAddProduct = () => {
 
 const editProduct = (p) => {
   editingProduct.value = p
-  form.value = { name: p.name, category: p.category, desc: p.desc, price: p.price, sort: p.sort, image: p.image, status: p.status }
+  form.value = { name: p.name, category: p.category, desc: p.desc, price: p.price, sort: p.sort, image: p.image, options: parseOptions(p.options), status: p.status }
   imageFile.value = null
   imagePreview.value = p.image || ''
   markFormPristine()
@@ -481,6 +508,68 @@ const deleteProduct = async (id) => {
   object-fit: cover;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
+}
+
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.option-label {
+  flex: 1;
+}
+
+.option-price-wrap {
+  display: flex;
+  align-items: center;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.option-price-wrap .option-plus {
+  padding: 0 8px;
+  color: #64748b;
+  font-size: 14px;
+  background: #f8fafc;
+  border-right: 1px solid #e5e7eb;
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+
+.option-price-wrap .option-price {
+  width: 80px;
+  border: none;
+  border-radius: 0;
+  padding: 10px 12px;
+}
+
+.option-remove {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #ef4444;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.option-remove:hover {
+  background: #fee2e2;
+}
+
+.option-add {
+  padding: 8px 14px;
+  border: 1px dashed #35c1d0;
+  border-radius: 8px;
+  background: transparent;
+  color: #0e7a8a;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .modal-actions {

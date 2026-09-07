@@ -57,6 +57,7 @@ app.use('/uploads', express.static(path.join(projectRoot, 'public', 'uploads')))
 
 const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)
 const pick = (body, fields) => Object.fromEntries(fields.map((field) => [field, body[field]]))
+const serializeValue = (value) => (value !== null && typeof value === 'object') || Array.isArray(value) ? JSON.stringify(value) : value
 
 app.get('/api/health', asyncRoute(async (_req, res) => {
   await db.query('SELECT 1')
@@ -74,10 +75,12 @@ app.post('/api/auth/register', asyncRoute(async (req, res) => {
 }))
 
 app.post('/api/auth/login', asyncRoute(async (req, res) => {
-  const [rows] = await db.query('SELECT id, name, email, password_hash, status FROM members WHERE email = ?', [req.body.email])
+  const [rows] = await db.query('SELECT id, name, email, password_hash, status, phone, address FROM members WHERE email = ?', [req.body.email])
   const member = rows[0]
-  if (!member || member.status !== 'active' || !(await bcrypt.compare(req.body.password || '', member.password_hash))) return res.status(401).json({ message: '帳號或密碼錯誤' })
-  res.json({ member: { id: member.id, name: member.name, email: member.email } })
+  if (!member) return res.status(401).json({ message: '帳號或密碼錯誤' })
+  if (!(await bcrypt.compare(req.body.password || '', member.password_hash))) return res.status(401).json({ message: '帳號或密碼錯誤' })
+  if (member.status !== 'active') return res.status(403).json({ message: '帳號已停用，請聯絡管理員', disabled: true })
+  res.json({ member: { id: member.id, name: member.name, email: member.email, phone: member.phone, address: member.address } })
 }))
 
 app.post('/api/members', asyncRoute(async (req, res) => {
@@ -108,9 +111,35 @@ app.post('/api/uploads/news', newsUpload.single('image'), (req, res) => {
   res.status(201).json({ image_url: `/uploads/news/${req.file.filename}` })
 })
 
+app.get('/api/me/:id', asyncRoute(async (req, res) => {
+  const [rows] = await db.query('SELECT id, name, email, phone, address FROM members WHERE id = ?', [req.params.id])
+  if (!rows.length) return res.status(404).json({ message: '找不到會員' })
+  res.json(rows[0])
+}))
+
+app.put('/api/me/:id', asyncRoute(async (req, res) => {
+  const { name, phone, address } = req.body
+  if (!name) return res.status(400).json({ message: '姓名不可為空白' })
+  await db.query('UPDATE members SET name = ?, phone = ?, address = ? WHERE id = ?', [name, phone || null, address || null, req.params.id])
+  res.status(204).end()
+}))
+
+app.post('/api/me/:id/password', asyncRoute(async (req, res) => {
+  const { oldPassword, newPassword } = req.body
+  if (!oldPassword || !newPassword || newPassword.length < 6) {
+    return res.status(400).json({ message: '請填寫原密碼與至少 6 碼的新密碼' })
+  }
+  const [rows] = await db.query('SELECT password_hash FROM members WHERE id = ?', [req.params.id])
+  if (!rows.length) return res.status(404).json({ message: '找不到會員' })
+  if (!(await bcrypt.compare(oldPassword, rows[0].password_hash))) return res.status(400).json({ message: '原密碼錯誤' })
+  const passwordHash = await bcrypt.hash(newPassword, 12)
+  await db.query('UPDATE members SET password_hash = ? WHERE id = ?', [passwordHash, req.params.id])
+  res.status(204).end()
+}))
+
 const resources = {
-  members: { table: 'members', columns: ['name', 'email', 'phone', 'status'], select: 'id, name, email, phone, status, created_at AS createdAt' },
-  products: { table: 'products', columns: ['name', 'category', 'description', 'price', 'image_url', 'status', 'sort_order'], select: 'id, name, category, description AS `desc`, price, image_url AS image, status, sort_order AS sort, created_at AS createdAt' },
+  members: { table: 'members', columns: ['name', 'email', 'phone', 'address', 'status'], select: 'id, name, email, phone, address, status, created_at AS createdAt' },
+  products: { table: 'products', columns: ['name', 'category', 'description', 'price', 'image_url', 'options', 'status', 'sort_order'], select: 'id, name, category, description AS `desc`, price, image_url AS image, options, status, sort_order AS sort, created_at AS createdAt' },
   news: { table: 'news', columns: ['title', 'content', 'image_url', 'published_at', 'status'], select: "id, title, content AS `desc`, image_url AS image, DATE_FORMAT(published_at, '%Y-%m-%d') AS date, status, created_at AS createdAt" }
 }
 
@@ -123,13 +152,13 @@ for (const [route, config] of Object.entries(resources)) {
   }))
   app.post(`/api/${route}`, asyncRoute(async (req, res) => {
     const data = pick(req.body, config.columns)
-    const values = config.columns.map((column) => data[column] ?? null)
+    const values = config.columns.map((column) => serializeValue(data[column] ?? null))
     const [result] = await db.query(`INSERT INTO ${config.table} (${config.columns.join(', ')}) VALUES (${config.columns.map(() => '?').join(', ')})`, values)
     res.status(201).json({ id: result.insertId })
   }))
   app.put(`/api/${route}/:id`, asyncRoute(async (req, res) => {
     const data = pick(req.body, config.columns)
-    const values = [...config.columns.map((column) => data[column] ?? null), req.params.id]
+    const values = [...config.columns.map((column) => serializeValue(data[column] ?? null)), req.params.id]
     const [result] = await db.query(`UPDATE ${config.table} SET ${config.columns.map((column) => `${column} = ?`).join(', ')} WHERE id = ?`, values)
     if (!result.affectedRows) return res.status(404).json({ message: '找不到資料' })
     res.status(204).end()
@@ -140,6 +169,149 @@ for (const [route, config] of Object.entries(resources)) {
     res.status(204).end()
   }))
 }
+
+app.get('/api/orders', asyncRoute(async (_req, res) => {
+  const [rows] = await db.query('SELECT id, order_number, member_id, name, phone, address, delivery_type AS deliveryType, pickup_time AS pickupTime, total, items, status, sub_status AS subStatus, remark, status_history AS statusHistory, created_at AS createdAt FROM orders ORDER BY id DESC')
+  res.json(rows)
+}))
+
+app.get('/api/orders/guest', asyncRoute(async (req, res) => {
+  const { orderNumber, phone } = req.query
+  if (!orderNumber || !phone) return res.status(400).json({ message: '請填寫訂單編號與手機號碼' })
+  const [rows] = await db.query(
+    'SELECT id, order_number, member_id, name, phone, address, delivery_type AS deliveryType, pickup_time AS pickupTime, total, items, status, sub_status AS subStatus, remark, status_history AS statusHistory, created_at AS createdAt FROM orders WHERE order_number = ? AND phone = ?',
+    [orderNumber, phone]
+  )
+  res.json(rows)
+}))
+
+app.get('/api/orders/member/:memberId', asyncRoute(async (req, res) => {
+  const [rows] = await db.query(
+    'SELECT id, order_number, member_id, name, phone, address, delivery_type AS deliveryType, pickup_time AS pickupTime, total, items, status, sub_status AS subStatus, remark, status_history AS statusHistory, created_at AS createdAt FROM orders WHERE member_id = ? ORDER BY id DESC',
+    [req.params.memberId]
+  )
+  res.json(rows)
+}))
+
+app.post('/api/orders', asyncRoute(async (req, res) => {
+  const { name, phone, address, items, member_id, delivery_type, pickup_time } = req.body
+  const deliveryType = delivery_type === 'pickup' ? 'pickup' : 'delivery'
+  if (!name || !phone || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ message: '請填寫收件人、電話與至少一件商品' })
+  }
+  if (deliveryType === 'delivery' && !address) {
+    return res.status(400).json({ message: '請填寫配送地址' })
+  }
+  if (deliveryType === 'pickup' && !pickup_time) {
+    return res.status(400).json({ message: '請選擇取貨時間' })
+  }
+  const total = items.reduce((sum, item) => {
+    const unitPrice = Number(item.price) + (Array.isArray(item.options) ? item.options.reduce((o, opt) => o + Number(opt.price || 0), 0) : 0)
+    return sum + unitPrice * item.qty
+  }, 0)
+  const now = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  const prefix = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`
+  const [countRows] = await db.query(
+    "SELECT COUNT(*) AS cnt FROM orders WHERE order_number LIKE ?",
+    [`${prefix}%`]
+  )
+  const seq = String(countRows[0].cnt + 1).padStart(3, '0')
+  const orderNumber = `${prefix}${seq}`
+  const [result] = await db.query(
+    'INSERT INTO orders (order_number, member_id, name, phone, address, delivery_type, pickup_time, total, items, status, sub_status, status_history) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [orderNumber, member_id ?? null, name, phone, deliveryType === 'delivery' ? address : null, deliveryType, deliveryType === 'pickup' ? pickup_time : null, total, JSON.stringify(items), 'pending', 'submitted', JSON.stringify([{ stage: 'submitted', time: now.toISOString() }])]
+  )
+  res.status(201).json({ id: result.insertId, order_number: orderNumber })
+}))
+
+const ORDER_STAGES = ['submitted', 'received', 'preparing', 'ready', 'delivering', 'delivered', 'cancelled']
+const PROGRESS_ORDER = ['submitted', 'received', 'preparing', 'ready', 'delivering', 'delivered']
+const stageToStatus = (stage) => {
+  if (stage === 'delivered') return 'completed'
+  if (stage === 'cancelled') return 'cancelled'
+  if (stage === 'submitted') return 'pending'
+  return 'processing'
+}
+
+const buildContinuousHistory = (history, finalStage, cancelAtStage, backfillTime) => {
+  const known = new Map()
+  if (history) {
+    for (const item of history) {
+      if (item && item.stage) known.set(item.stage, item.time)
+    }
+  }
+  let targets = []
+  if (finalStage === 'cancelled') {
+    const lastProgress = cancelAtStage && PROGRESS_ORDER.includes(cancelAtStage)
+      ? cancelAtStage
+      : (known.has('submitted') ? 'submitted' : PROGRESS_ORDER[0])
+    targets = PROGRESS_ORDER.slice(0, PROGRESS_ORDER.indexOf(lastProgress) + 1)
+    targets.push('cancelled')
+  } else {
+    const idx = PROGRESS_ORDER.indexOf(finalStage)
+    targets = PROGRESS_ORDER.slice(0, idx + 1)
+  }
+  return targets.map(stage => ({ stage, time: known.get(stage) || backfillTime }))
+}
+
+app.put('/api/orders/:id', asyncRoute(async (req, res) => {
+  const { status, sub_status: subStatus, remark, status_history: statusHistory } = req.body
+  const [rows] = await db.query('SELECT sub_status AS subStatus, status, delivery_type AS deliveryType FROM orders WHERE id = ?', [req.params.id])
+  const current = rows[0]
+  if (!current) return res.status(404).json({ message: '找不到資料' })
+  if (current.status === 'cancelled' || current.status === 'completed') {
+    if (subStatus !== undefined && subStatus !== current.subStatus) {
+      return res.status(400).json({ message: '已取消或已完成的訂單無法修改狀態' })
+    }
+  }
+  let finalStatus = status
+  let finalSubStatus = subStatus
+  if (subStatus !== undefined) {
+    if (!ORDER_STAGES.includes(subStatus)) return res.status(400).json({ message: '訂單狀態不正確' })
+    if (subStatus === 'delivering' && current.deliveryType !== 'delivery') {
+      return res.status(400).json({ message: '取貨訂單無法設定配送中狀態' })
+    }
+    const curIdx = PROGRESS_ORDER.indexOf(current.subStatus)
+    const newIdx = PROGRESS_ORDER.indexOf(subStatus)
+    if (subStatus !== 'cancelled' && curIdx >= 0 && newIdx < curIdx) {
+      return res.status(400).json({ message: '訂單狀態不可回溯' })
+    }
+    finalStatus = stageToStatus(subStatus)
+  }
+  if (finalStatus !== undefined && !['pending', 'processing', 'completed', 'cancelled'].includes(finalStatus)) {
+    return res.status(400).json({ message: '訂單狀態不正確' })
+  }
+  let finalHistory = statusHistory
+  if (finalSubStatus !== undefined) {
+    const confirmTime = (Array.isArray(statusHistory) && statusHistory.length)
+      ? (statusHistory[statusHistory.length - 1].time || new Date().toISOString())
+      : new Date().toISOString()
+    const historyBase = Array.isArray(statusHistory) ? statusHistory : []
+    finalHistory = buildContinuousHistory(
+      historyBase,
+      finalSubStatus,
+      finalSubStatus === 'cancelled' ? current.subStatus : null,
+      confirmTime
+    )
+  }
+  const sets = []
+  const values = []
+  if (finalStatus !== undefined) { sets.push('status = ?'); values.push(finalStatus) }
+  if (finalSubStatus !== undefined) { sets.push('sub_status = ?'); values.push(finalSubStatus) }
+  if (finalHistory !== undefined) { sets.push('status_history = ?'); values.push(JSON.stringify(finalHistory)) }
+  if (remark !== undefined) { sets.push('remark = ?'); values.push(remark) }
+  if (!sets.length) return res.status(400).json({ message: '請提供要更新的欄位' })
+  values.push(req.params.id)
+  await db.query(`UPDATE orders SET ${sets.join(', ')} WHERE id = ?`, values)
+  res.status(204).end()
+}))
+
+app.delete('/api/orders/:id', asyncRoute(async (req, res) => {
+  const [result] = await db.query('DELETE FROM orders WHERE id = ?', [req.params.id])
+  if (!result.affectedRows) return res.status(404).json({ message: '找不到資料' })
+  res.status(204).end()
+}))
 
 app.use((error, _req, res, _next) => {
   console.error(error)

@@ -18,6 +18,7 @@
             <th>姓名</th>
             <th>Email</th>
             <th>電話</th>
+            <th>地址</th>
             <th>註冊時間</th>
             <th>狀態</th>
             <th>操作</th>
@@ -29,6 +30,7 @@
             <td>{{ m.name }}</td>
             <td>{{ m.email }}</td>
             <td>{{ m.phone }}</td>
+            <td>{{ m.address || '-' }}</td>
             <td>{{ m.createdAt }}</td>
             <td><span :class="['status-badge', m.status]">{{ m.statusText }}</span></td>
             <td>
@@ -53,6 +55,10 @@
               <label for="member-phone">電話</label>
               <input id="member-phone" v-model.trim="form.phone" type="tel" maxlength="30" />
             </div>
+          </div>
+          <div class="form-group">
+            <label for="member-address">地址</label>
+            <input id="member-address" v-model.trim="form.address" type="text" maxlength="500" />
           </div>
           <div class="form-group">
             <label for="member-email">Email</label>
@@ -91,7 +97,7 @@ const members = ref([])
 const showAddModal = ref(false)
 const isSaving = ref(false)
 const formError = ref('')
-const emptyForm = () => ({ name: '', email: '', phone: '', password: '', status: 'active' })
+const emptyForm = () => ({ name: '', email: '', phone: '', address: '', password: '', status: 'active' })
 const form = ref(emptyForm())
 const isFormDirty = () => Object.entries(form.value).some(([key, value]) => value !== emptyForm()[key])
 
@@ -222,6 +228,10 @@ const deleteMember = async (id) => {
 .data-table td {
   font-size: 14px;
   color: #334155;
+}
+
+.data-table td:nth-child(5) {
+  max-width: 200px;
 }
 
 .data-table tbody tr:hover {

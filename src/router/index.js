@@ -49,6 +49,18 @@ const routes = [
     component: () => import("../views/RegisterView.vue"),
     meta: { layout: "default" }
   },
+  {
+    path: "/member-zone",
+    name: "memberZone",
+    component: () => import("../views/MemberZone.vue"),
+    meta: { layout: "default" }
+  },
+  {
+    path: "/orders/query",
+    name: "orderQuery",
+    component: () => import("../views/OrderQuery.vue"),
+    meta: { layout: "default" }
+  },
 {
   path: "/admin/login",
   name: "adminLogin",
@@ -72,6 +84,9 @@ const routes = [
       { path: "members", 
         name: "adminMembers", 
         component: () => import("../admin/views/Members.vue") },
+      { path: "orders", 
+        name: "adminOrders", 
+        component: () => import("../admin/views/Orders.vue") },
       { path: "products", 
         name: "adminProducts", 
         component: () => import("../admin/views/AdminProducts.vue") },

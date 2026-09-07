@@ -47,8 +47,14 @@ export default{
             購物車
             <span v-if="cartstore.totalqty">({{ cartstore.totalqty }})</span>
           </RouterLink>
+          <RouterLink :to="{name:'orderQuery'}">
+            訂單查詢
+          </RouterLink>
 
           <template v-if="memberstore.isLoggedIn">
+            <RouterLink :to="{name:'memberZone'}" class="nav-link">
+              會員專區
+            </RouterLink>
             <span class="nav-user">{{ memberstore.userName }}</span>
             <button class="nav-logout" @click="logout">登出</button>
           </template>

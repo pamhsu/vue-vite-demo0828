@@ -31,7 +31,7 @@ export const useMemberStore =
                     body: JSON.stringify({ email, password })
                 })
                 const data = await response.json()
-                if (!response.ok) return { success: false, message: data.message || '帳號或密碼錯誤' }
+                if (!response.ok) return { success: false, disabled: !!data.disabled, message: data.message || '帳號或密碼錯誤' }
                 this.user = data.member
                 localStorage.setItem("member", JSON.stringify(this.user))
                 return { success: true, message: "登入成功" }
@@ -39,6 +39,32 @@ export const useMemberStore =
             logout() {
                 this.user = null
                 localStorage.removeItem("member")
+            },
+            async updateProfile(payload) {
+                const response = await fetch(`/api/me/${this.user.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                })
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}))
+                    return { success: false, message: data.message || '更新失敗' }
+                }
+                this.user = { ...this.user, ...payload }
+                localStorage.setItem("member", JSON.stringify(this.user))
+                return { success: true, message: "資料已更新" }
+            },
+            async changePassword(oldPassword, newPassword) {
+                const response = await fetch(`/api/me/${this.user.id}/password`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ oldPassword, newPassword })
+                })
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}))
+                    return { success: false, message: data.message || '更改密碼失敗' }
+                }
+                return { success: true, message: "密碼已更新" }
             }
         }
     })

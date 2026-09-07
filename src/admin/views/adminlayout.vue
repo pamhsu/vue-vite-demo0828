@@ -41,6 +41,15 @@
         </RouterLink>
 
         <RouterLink
+          to="/admin/orders"
+          class="menu-item"
+          :class="{ active: isActive('/admin/orders') }"
+        >
+          <span class="menu-icon">☑</span>
+          <span v-if="!sidebarCollapsed">訂單管理</span>
+        </RouterLink>
+
+        <RouterLink
           to="/admin/products"
           class="menu-item"
           :class="{ active: isActive('/admin/products') }"
@@ -178,6 +187,7 @@ const pageTitle = computed(() => {
   const titles = {
     '/admin/dashboard': '儀表板',
     '/admin/members': '會員管理',
+    '/admin/orders': '訂單管理',
     '/admin/products': '商品管理',
     '/admin/news': '最新消息',
     '/admin/settings': '系統設定'
