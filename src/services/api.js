@@ -1,6 +1,11 @@
 export async function api(path, options = {}) {
+  const adminToken = localStorage.getItem('adminToken')
   const response = await fetch(`/api${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(adminToken ? { Authorization: `Bearer ${adminToken}` } : {}),
+      ...(options.headers || {})
+    },
     ...options
   })
   if (response.status === 204) return null

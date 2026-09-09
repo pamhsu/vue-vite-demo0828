@@ -11,16 +11,19 @@ const errorMessage = ref("")
 const login = () => {
   errorMessage.value = ""
 
-  // 暫時使用測試帳號
-  if (username.value === "admin" && password.value === "123456") {
-    // 記錄登入狀態
-    localStorage.setItem("adminToken", "login")
-
-    // 登入成功 → 後台首頁
-    router.push("/admin/dashboard")
-  } else {
-    errorMessage.value = "帳號或密碼錯誤"
-  }
+  fetch('/api/admin/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: username.value, password: password.value })
+  })
+    .then(async (response) => {
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.message || '登入失敗')
+      localStorage.setItem('adminToken', data.token)
+      localStorage.setItem('adminUser', JSON.stringify(data.admin))
+      router.push(data.admin.role === 'sales' ? '/admin/orders' : '/admin/dashboard')
+    })
+    .catch((error) => { errorMessage.value = error.message || '帳號或密碼錯誤' })
 }
 </script>
 

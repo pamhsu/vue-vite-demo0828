@@ -23,6 +23,7 @@
         </div>
 
         <RouterLink
+          v-if="!isSales"
           to="/admin/dashboard"
           class="menu-item"
           :class="{ active: isActive('/admin/dashboard') }"
@@ -32,6 +33,7 @@
         </RouterLink>
 
         <RouterLink
+          v-if="!isSales"
           to="/admin/members"
           class="menu-item"
           :class="{ active: isActive('/admin/members') }"
@@ -50,6 +52,7 @@
         </RouterLink>
 
         <RouterLink
+          v-if="!isSales"
           to="/admin/products"
           class="menu-item"
           :class="{ active: isActive('/admin/products') }"
@@ -59,6 +62,7 @@
         </RouterLink>
 
         <RouterLink
+          v-if="!isSales"
           to="/admin/news"
           class="menu-item"
           :class="{ active: isActive('/admin/news') }"
@@ -69,12 +73,14 @@
 
         <div
           v-if="!sidebarCollapsed"
+          v-show="!isSales"
           class="menu-section"
         >
           系統管理
         </div>
 
         <RouterLink
+          v-if="!isSales"
           to="/admin/settings"
           class="menu-item"
           :class="{ active: isActive('/admin/settings') }"
@@ -118,25 +124,17 @@
         </div>
 
         <div class="header-right">
-          <!-- Notification -->
-          <button
-            class="notification-button"
-            type="button"
-            title="通知"
-          >
-            ♢
-            <span class="notification-dot"></span>
-          </button>
+          <OrderNotifications />
 
           <!-- User -->
           <div class="user-menu">
             <div class="avatar">
-              管
+              {{ currentAdmin.name?.slice(0, 1) || '管' }}
             </div>
 
             <div class="user-info">
-              <strong>最高管理員</strong>
-              <span>Administrator</span>
+              <strong>{{ currentAdmin.name || '管理員' }}</strong>
+              <span>{{ roleText(currentAdmin.role) }}</span>
             </div>
 
             <span class="user-arrow">⌄</span>
@@ -163,18 +161,27 @@
         </section>
       </main>
     </div>
+
   </div>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import OrderNotifications from '../components/OrderNotifications.vue'
 
 const route = useRoute()
 const router = useRouter()
 
 const sidebarCollapsed = ref(false)
-
+const currentAdmin = ref({})
+try {
+  currentAdmin.value = JSON.parse(localStorage.getItem('adminUser') || '{}')
+} catch {
+  currentAdmin.value = {}
+}
+const isSales = computed(() => currentAdmin.value.role === 'sales')
+const roleText = (role) => ({ superadmin: '最高管理員', admin: '管理員', sales: '訂單人員' })[role] || '管理員'
 const toggleSidebar = () => {
   sidebarCollapsed.value = !sidebarCollapsed.value
 }
@@ -198,12 +205,15 @@ const pageTitle = computed(() => {
 
 // 登出
 const logout = () => {
-  // 清除登入狀態
+  const token = localStorage.getItem('adminToken')
+  if (token) fetch('/api/admin/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).catch(() => {})
   localStorage.removeItem("adminToken")
+  localStorage.removeItem("adminUser")
   
   // 回到後台登入頁
   router.push("/admin/login")
 }
+
 </script>
 
 <style scoped>
@@ -501,39 +511,6 @@ const logout = () => {
   font-size: 16px;
   font-weight: 600;
   color: #334155;
-}
-
-/* Notification */
-
-.notification-button {
-  position: relative;
-
-  width: 38px;
-  height: 38px;
-
-  margin-right: 18px;
-
-  border: 0;
-  background: transparent;
-
-  color: #64748b;
-
-  font-size: 22px;
-
-  cursor: pointer;
-}
-
-.notification-dot {
-  position: absolute;
-  top: 8px;
-  right: 7px;
-
-  width: 7px;
-  height: 7px;
-
-  border-radius: 50%;
-
-  background: #ef4444;
 }
 
 /* User */

@@ -105,19 +105,18 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to, from, next) => {
+router.beforeEach((to) => {
   const token = localStorage.getItem("adminToken")
 
-  if (
-    to.path.startsWith("/admin") &&
-    to.path !== "/admin/login" &&
-    !token
-  ) {
-    next("/admin/login")
-    return
+  if (to.path.startsWith("/admin") && to.path !== "/admin/login") {
+    if (!token) return "/admin/login"
+    try {
+      const admin = JSON.parse(localStorage.getItem('adminUser') || '{}')
+      if (admin.role === 'sales' && to.path !== '/admin/orders') return '/admin/orders'
+    } catch {
+      return '/admin/login'
+    }
   }
-
-  next()
 })
 
 export default router

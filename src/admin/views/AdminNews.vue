@@ -107,7 +107,12 @@ const saveNews = async () => {
     if (imageFile.value) {
       const data = new FormData()
       data.append('image', imageFile.value)
-      const response = await fetch('/api/uploads/news', { method: 'POST', body: data })
+      const token = localStorage.getItem('adminToken')
+      const response = await fetch('/api/uploads/news', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: data
+      })
       const uploaded = await response.json()
       if (!response.ok) throw new Error(uploaded.message || '圖片上傳失敗')
       imageUrl = uploaded.image_url

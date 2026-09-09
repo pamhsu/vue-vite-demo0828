@@ -10,6 +10,7 @@ export default {
       orders: [],
       selectedOrder: null,
       isLoading: false,
+      isCancelling: false,
       errMsg: "",
       loaded: false,
       prefilled: false
@@ -64,6 +65,29 @@ export default {
     },
     closeDetail() {
       this.selectedOrder = null
+    },
+    async cancelOrder() {
+      if (!this.selectedOrder || !confirm('確定要取消這筆訂單嗎？取消後無法恢復。')) return
+      this.isCancelling = true
+      this.errMsg = ''
+      try {
+        const response = await fetch(`/api/orders/${this.selectedOrder.id}/cancel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ memberId: this.member?.id, phone: this.selectedOrder.phone })
+        })
+        if (!response.ok) {
+          const data = await response.json()
+          throw new Error(data.message || '取消訂單失敗')
+        }
+        this.closeDetail()
+        if (this.member) await this.loadMemberOrders()
+        else await this.queryAsGuest()
+      } catch (error) {
+        this.errMsg = error.message || '取消訂單失敗'
+      } finally {
+        this.isCancelling = false
+      }
     },
     historyEntries(order) {
       const progress = ['submitted', 'received', 'preparing', 'ready', 'delivering', 'delivered']
@@ -222,6 +246,9 @@ export default {
             <span class="detail-label">訂單狀態</span>
             <span><span :class="['status-badge', selectedOrder.status]">{{ statusText(selectedOrder.status) }}</span></span>
           </div>
+          <button v-if="selectedOrder.status === 'pending'" class="cancel-order-btn" :disabled="isCancelling" @click="cancelOrder">
+            {{ isCancelling ? '取消中…' : '取消此筆訂單' }}
+          </button>
           <div class="detail-row">
             <span class="detail-label">下單時間</span>
             <span class="detail-value">{{ formatDate(selectedOrder.createdAt) }}</span>
@@ -474,6 +501,28 @@ export default {
   margin-top: 18px;
   padding-top: 14px;
   border-top: 1px solid #e8e3d9;
+}
+
+.cancel-order-btn {
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid #dc2626;
+  border-radius: 8px;
+  background: white;
+  color: #b91c1c;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cancel-order-btn:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
+.cancel-order-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .detail-section-title {

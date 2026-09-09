@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import bcrypt from 'bcryptjs'
 import cors from 'cors'
+import crypto from 'node:crypto'
 import express from 'express'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -59,9 +60,136 @@ const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req,
 const pick = (body, fields) => Object.fromEntries(fields.map((field) => [field, body[field]]))
 const serializeValue = (value) => (value !== null && typeof value === 'object') || Array.isArray(value) ? JSON.stringify(value) : value
 
+const ADMIN_ROLES = ['superadmin', 'admin', 'sales']
+const ADMIN_SESSION_DAYS = 8
+const publicAdmin = (admin) => ({
+  id: admin.id,
+  username: admin.username,
+  name: admin.name,
+  email: admin.email,
+  role: admin.role,
+  status: admin.status,
+  lastLoginAt: admin.last_login_at ?? admin.lastLoginAt ?? null
+})
+const createAdminToken = () => crypto.randomBytes(48).toString('hex')
+const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex')
+const authenticateAdmin = asyncRoute(async (req, res, next) => {
+  const token = req.get('authorization')?.replace(/^Bearer\s+/i, '')
+  if (!token) return res.status(401).json({ message: '請先登入後台' })
+  const [rows] = await db.query(`
+    SELECT a.id, a.username, a.name, a.email, a.role, a.status, a.last_login_at
+    FROM admin_sessions AS s
+    JOIN admins AS a ON a.id = s.admin_id
+    WHERE s.token_hash = ? AND s.expires_at > NOW()
+  `, [hashToken(token)])
+  const admin = rows[0]
+  if (!admin || admin.status !== 'active') return res.status(401).json({ message: '登入已失效，請重新登入' })
+  req.admin = admin
+  next()
+})
+const requireRole = (...roles) => [authenticateAdmin, (req, res, next) => {
+  if (!roles.includes(req.admin.role)) return res.status(403).json({ message: '你沒有使用此功能的權限' })
+  next()
+}]
+const adminManagers = () => requireRole('superadmin', 'admin')
+const canManageAdmin = (actor, target) => actor.role === 'superadmin' || target.role !== 'superadmin'
+const createOrderNotification = async ({ orderId, type, title, message }) => {
+  await db.query(
+    'INSERT IGNORE INTO admin_notifications (order_id, type, title, message) VALUES (?, ?, ?, ?)',
+    [orderId, type, title, message]
+  )
+}
+const createPendingOverdueNotifications = async () => {
+  await db.query(`
+    INSERT IGNORE INTO admin_notifications (order_id, type, title, message)
+    SELECT id, 'pending_overdue', CONCAT('訂單 #', order_number, ' 尚未處理'),
+      CONCAT('已等待超過 10 分鐘，請盡快接收訂單。')
+    FROM orders
+    WHERE status = 'pending'
+      AND created_at <= DATE_SUB(NOW(), INTERVAL 10 MINUTE)
+  `)
+}
+
 app.get('/api/health', asyncRoute(async (_req, res) => {
   await db.query('SELECT 1')
   res.json({ ok: true })
+}))
+
+app.get('/api/dashboard/summary', ...adminManagers(), asyncRoute(async (_req, res) => {
+  const [rows] = await db.query(`
+    SELECT
+      (SELECT COUNT(*) FROM members) AS memberCount,
+      (SELECT COUNT(*) FROM products) AS productCount,
+      (SELECT COUNT(*) FROM orders WHERE status = 'pending') AS pendingOrderCount,
+      COALESCE((
+        SELECT SUM(total)
+        FROM orders
+        WHERE status = 'completed'
+          AND created_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+          AND created_at < DATE_ADD(LAST_DAY(CURDATE()), INTERVAL 1 DAY)
+      ), 0) AS monthlyRevenue
+  `)
+  res.json(rows[0])
+}))
+
+app.get('/api/dashboard/order-trend', ...adminManagers(), asyncRoute(async (_req, res) => {
+  const [rows] = await db.query(`
+    WITH RECURSIVE calendar AS (
+      SELECT CURDATE() - INTERVAL 6 DAY AS day
+      UNION ALL
+      SELECT day + INTERVAL 1 DAY FROM calendar WHERE day < CURDATE()
+    )
+    SELECT
+      DATE_FORMAT(calendar.day, '%Y-%m-%d') AS date,
+      DATE_FORMAT(calendar.day, '%m/%d') AS label,
+      COUNT(orders.id) AS totalOrders,
+      COALESCE(SUM(orders.status = 'completed'), 0) AS completedOrders,
+      COALESCE(SUM(orders.status = 'cancelled'), 0) AS cancelledOrders
+    FROM calendar
+    LEFT JOIN orders
+      ON orders.created_at >= calendar.day
+      AND orders.created_at < calendar.day + INTERVAL 1 DAY
+    GROUP BY calendar.day
+    ORDER BY calendar.day
+  `)
+  res.json(rows)
+}))
+
+app.get('/api/dashboard/top-products', ...adminManagers(), asyncRoute(async (req, res) => {
+  const days = Math.min(Math.max(Number.parseInt(req.query.days, 10) || 30, 1), 365)
+  const [orders] = await db.query(`
+    SELECT items
+    FROM orders
+    WHERE status = 'completed'
+      AND created_at >= CURDATE() - INTERVAL ${days - 1} DAY
+  `)
+
+  const products = new Map()
+  for (const order of orders) {
+      let items
+      try {
+        items = typeof order.items === 'string' ? JSON.parse(order.items) : order.items
+      } catch {
+        continue
+      }
+    if (!Array.isArray(items)) continue
+    for (const item of items) {
+      const quantity = Math.max(Number(item.qty) || 0, 0)
+      if (!item.name || !quantity) continue
+      const key = item.id != null ? `id:${item.id}` : `name:${item.name}`
+      const optionPrice = Array.isArray(item.options)
+        ? item.options.reduce((sum, option) => sum + (Number(option.price) || 0), 0)
+        : 0
+      const current = products.get(key) || { productId: item.id ?? null, name: item.name, quantity: 0, revenue: 0 }
+      current.quantity += quantity
+      current.revenue += ((Number(item.price) || 0) + optionPrice) * quantity
+      products.set(key, current)
+    }
+  }
+
+  res.json([...products.values()]
+    .sort((a, b) => b.quantity - a.quantity || b.revenue - a.revenue || a.name.localeCompare(b.name, 'zh-Hant'))
+    .slice(0, 5))
 }))
 
 app.post('/api/auth/register', asyncRoute(async (req, res) => {
@@ -83,7 +211,129 @@ app.post('/api/auth/login', asyncRoute(async (req, res) => {
   res.json({ member: { id: member.id, name: member.name, email: member.email, phone: member.phone, address: member.address } })
 }))
 
-app.post('/api/members', asyncRoute(async (req, res) => {
+app.post('/api/admin/auth/login', asyncRoute(async (req, res) => {
+  const username = req.body.username?.trim()
+  const password = req.body.password || ''
+  if (!username || !password) return res.status(400).json({ message: '請輸入帳號與密碼' })
+  const [rows] = await db.query('SELECT * FROM admins WHERE username = ?', [username])
+  const admin = rows[0]
+  if (!admin || !(await bcrypt.compare(password, admin.password_hash))) {
+    return res.status(401).json({ message: '帳號或密碼錯誤' })
+  }
+  if (admin.status !== 'active') return res.status(403).json({ message: '此管理員帳號已停用' })
+
+  const token = createAdminToken()
+  await db.query('DELETE FROM admin_sessions WHERE expires_at <= NOW()')
+  await db.query('INSERT INTO admin_sessions (admin_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? DAY))', [admin.id, hashToken(token), ADMIN_SESSION_DAYS])
+  await db.query('UPDATE admins SET last_login_at = NOW() WHERE id = ?', [admin.id])
+  admin.last_login_at = new Date()
+  res.json({ token, admin: publicAdmin(admin) })
+}))
+
+app.post('/api/admin/auth/logout', authenticateAdmin, asyncRoute(async (req, res) => {
+  const token = req.get('authorization').replace(/^Bearer\s+/i, '')
+  await db.query('DELETE FROM admin_sessions WHERE token_hash = ?', [hashToken(token)])
+  res.status(204).end()
+}))
+
+app.get('/api/admin/notifications', ...requireRole('superadmin', 'admin', 'sales'), asyncRoute(async (req, res) => {
+  await createPendingOverdueNotifications()
+  const [rows] = await db.query(`
+    SELECT n.id, n.order_id AS orderId, o.order_number AS orderNumber, o.name AS customerName,
+      o.total, o.delivery_type AS deliveryType, o.created_at AS orderCreatedAt, o.status AS orderStatus,
+      n.type, n.title, n.message, n.created_at AS createdAt, (r.notification_id IS NOT NULL) AS isRead
+    FROM admin_notifications AS n
+    JOIN orders AS o ON o.id = n.order_id
+    LEFT JOIN admin_notification_reads AS r
+      ON r.notification_id = n.id AND r.admin_id = ?
+    ORDER BY n.created_at DESC
+    LIMIT 30
+  `, [req.admin.id])
+  res.json(rows)
+}))
+
+app.post('/api/admin/notifications/:id/read', ...requireRole('superadmin', 'admin', 'sales'), asyncRoute(async (req, res) => {
+  const [exists] = await db.query('SELECT id FROM admin_notifications WHERE id = ?', [req.params.id])
+  if (!exists.length) return res.status(404).json({ message: '找不到通知' })
+  await db.query('INSERT IGNORE INTO admin_notification_reads (notification_id, admin_id) VALUES (?, ?)', [req.params.id, req.admin.id])
+  res.status(204).end()
+}))
+
+app.post('/api/admin/notifications/read-all', ...requireRole('superadmin', 'admin', 'sales'), asyncRoute(async (req, res) => {
+  await createPendingOverdueNotifications()
+  await db.query(`
+    INSERT IGNORE INTO admin_notification_reads (notification_id, admin_id)
+    SELECT id, ? FROM admin_notifications
+  `, [req.admin.id])
+  res.status(204).end()
+}))
+
+app.get('/api/admins', ...adminManagers(), asyncRoute(async (_req, res) => {
+  const [rows] = await db.query(`
+    SELECT id, username, name, email, role, status, last_login_at
+    FROM admins
+    ORDER BY FIELD(role, 'superadmin', 'admin', 'sales'), id
+  `)
+  res.json(rows.map(publicAdmin))
+}))
+
+app.post('/api/admins', ...adminManagers(), asyncRoute(async (req, res) => {
+  const { username, name, email, password } = req.body
+  const role = req.body.role || 'admin'
+  if (!username?.trim() || !name?.trim() || !email?.trim() || !password || password.length < 6) {
+    return res.status(400).json({ message: '請填寫帳號、姓名、Email 與至少 6 碼的密碼' })
+  }
+  if (!ADMIN_ROLES.includes(role)) return res.status(400).json({ message: '管理員角色不正確' })
+  if (req.admin.role !== 'superadmin' && role === 'superadmin') return res.status(403).json({ message: '只有最高管理員可以新增最高管理員帳號' })
+  const [exists] = await db.query('SELECT id FROM admins WHERE username = ? OR email = ?', [username.trim(), email.trim()])
+  if (exists.length) return res.status(409).json({ message: '帳號或 Email 已存在' })
+  const passwordHash = await bcrypt.hash(password, 12)
+  const [result] = await db.query(
+    'INSERT INTO admins (username, name, email, password_hash, role) VALUES (?, ?, ?, ?, ?)',
+    [username.trim(), name.trim(), email.trim(), passwordHash, role]
+  )
+  const [rows] = await db.query('SELECT id, username, name, email, role, status, last_login_at FROM admins WHERE id = ?', [result.insertId])
+  res.status(201).json(publicAdmin(rows[0]))
+}))
+
+app.put('/api/admins/:id', ...adminManagers(), asyncRoute(async (req, res) => {
+  const [rows] = await db.query('SELECT * FROM admins WHERE id = ?', [req.params.id])
+  const target = rows[0]
+  if (!target) return res.status(404).json({ message: '找不到管理員帳號' })
+  if (!canManageAdmin(req.admin, target)) return res.status(403).json({ message: '不可修改最高管理員帳號' })
+  if (Number(req.admin.id) === Number(target.id) && req.body.status === 'inactive') return res.status(400).json({ message: '不可停用目前登入的帳號' })
+  const { name, email, password } = req.body
+  const role = req.body.role ?? target.role
+  const status = req.body.status ?? target.status
+  if (!name?.trim() || !email?.trim()) return res.status(400).json({ message: '姓名與 Email 不可空白' })
+  if (!ADMIN_ROLES.includes(role) || !['active', 'inactive'].includes(status)) return res.status(400).json({ message: '角色或狀態不正確' })
+  if (req.admin.role !== 'superadmin' && role === 'superadmin') return res.status(403).json({ message: '只有最高管理員可以設定最高管理員角色' })
+  const [exists] = await db.query('SELECT id FROM admins WHERE email = ? AND id != ?', [email.trim(), target.id])
+  if (exists.length) return res.status(409).json({ message: '此 Email 已被使用' })
+  const sets = ['name = ?', 'email = ?', 'role = ?', 'status = ?']
+  const values = [name.trim(), email.trim(), role, status]
+  if (password) {
+    if (password.length < 6) return res.status(400).json({ message: '新密碼至少需要 6 碼' })
+    sets.push('password_hash = ?')
+    values.push(await bcrypt.hash(password, 12))
+  }
+  values.push(target.id)
+  await db.query(`UPDATE admins SET ${sets.join(', ')} WHERE id = ?`, values)
+  const [updatedRows] = await db.query('SELECT id, username, name, email, role, status, last_login_at FROM admins WHERE id = ?', [target.id])
+  res.json(publicAdmin(updatedRows[0]))
+}))
+
+app.delete('/api/admins/:id', ...adminManagers(), asyncRoute(async (req, res) => {
+  const [rows] = await db.query('SELECT id, role FROM admins WHERE id = ?', [req.params.id])
+  const target = rows[0]
+  if (!target) return res.status(404).json({ message: '找不到管理員帳號' })
+  if (!canManageAdmin(req.admin, target)) return res.status(403).json({ message: '不可刪除最高管理員帳號' })
+  if (Number(req.admin.id) === Number(target.id)) return res.status(400).json({ message: '不可刪除目前登入的帳號' })
+  await db.query('DELETE FROM admins WHERE id = ?', [target.id])
+  res.status(204).end()
+}))
+
+app.post('/api/members', ...adminManagers(), asyncRoute(async (req, res) => {
   const { name, email, password, phone, status = 'active' } = req.body
   if (!name?.trim() || !email?.trim() || !password || password.length < 6) {
     return res.status(400).json({ message: '請填寫姓名、Email 與至少 6 碼的密碼' })
@@ -101,12 +351,12 @@ app.post('/api/members', asyncRoute(async (req, res) => {
   res.status(201).json({ id: result.insertId })
 }))
 
-app.post('/api/uploads/products', upload.single('image'), (req, res) => {
+app.post('/api/uploads/products', ...adminManagers(), upload.single('image'), (req, res) => {
   if (!req.file) return res.status(400).json({ message: '請選擇 JPG、PNG 或 WebP 圖片（最多 5 MB）' })
   res.status(201).json({ image_url: `/uploads/products/${req.file.filename}` })
 })
 
-app.post('/api/uploads/news', newsUpload.single('image'), (req, res) => {
+app.post('/api/uploads/news', ...adminManagers(), newsUpload.single('image'), (req, res) => {
   if (!req.file) return res.status(400).json({ message: '請選擇 JPG、PNG 或 WebP 圖片（最多 5 MB）' })
   res.status(201).json({ image_url: `/uploads/news/${req.file.filename}` })
 })
@@ -144,33 +394,34 @@ const resources = {
 }
 
 for (const [route, config] of Object.entries(resources)) {
-  app.get(`/api/${route}`, asyncRoute(async (req, res) => {
+  const accessMembers = route === 'members' ? adminManagers() : []
+  app.get(`/api/${route}`, ...accessMembers, asyncRoute(async (req, res) => {
     const params = []; let where = ''
     if (req.query.status) { where = ' WHERE status = ?'; params.push(req.query.status) }
     const [rows] = await db.query(`SELECT ${config.select} FROM ${config.table}${where} ORDER BY id DESC`, params)
     res.json(rows)
   }))
-  app.post(`/api/${route}`, asyncRoute(async (req, res) => {
+  app.post(`/api/${route}`, ...adminManagers(), asyncRoute(async (req, res) => {
     const data = pick(req.body, config.columns)
     const values = config.columns.map((column) => serializeValue(data[column] ?? null))
     const [result] = await db.query(`INSERT INTO ${config.table} (${config.columns.join(', ')}) VALUES (${config.columns.map(() => '?').join(', ')})`, values)
     res.status(201).json({ id: result.insertId })
   }))
-  app.put(`/api/${route}/:id`, asyncRoute(async (req, res) => {
+  app.put(`/api/${route}/:id`, ...adminManagers(), asyncRoute(async (req, res) => {
     const data = pick(req.body, config.columns)
     const values = [...config.columns.map((column) => serializeValue(data[column] ?? null)), req.params.id]
     const [result] = await db.query(`UPDATE ${config.table} SET ${config.columns.map((column) => `${column} = ?`).join(', ')} WHERE id = ?`, values)
     if (!result.affectedRows) return res.status(404).json({ message: '找不到資料' })
     res.status(204).end()
   }))
-  app.delete(`/api/${route}/:id`, asyncRoute(async (req, res) => {
+  app.delete(`/api/${route}/:id`, ...adminManagers(), asyncRoute(async (req, res) => {
     const [result] = await db.query(`DELETE FROM ${config.table} WHERE id = ?`, [req.params.id])
     if (!result.affectedRows) return res.status(404).json({ message: '找不到資料' })
     res.status(204).end()
   }))
 }
 
-app.get('/api/orders', asyncRoute(async (_req, res) => {
+app.get('/api/orders', ...requireRole('superadmin', 'admin', 'sales'), asyncRoute(async (_req, res) => {
   const [rows] = await db.query('SELECT id, order_number, member_id, name, phone, address, delivery_type AS deliveryType, pickup_time AS pickupTime, total, items, status, sub_status AS subStatus, remark, status_history AS statusHistory, created_at AS createdAt FROM orders ORDER BY id DESC')
   res.json(rows)
 }))
@@ -222,6 +473,12 @@ app.post('/api/orders', asyncRoute(async (req, res) => {
     'INSERT INTO orders (order_number, member_id, name, phone, address, delivery_type, pickup_time, total, items, status, sub_status, status_history) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     [orderNumber, member_id ?? null, name, phone, deliveryType === 'delivery' ? address : null, deliveryType, deliveryType === 'pickup' ? pickup_time : null, total, JSON.stringify(items), 'pending', 'submitted', JSON.stringify([{ stage: 'submitted', time: now.toISOString() }])]
   )
+  await createOrderNotification({
+    orderId: result.insertId,
+    type: 'new_order',
+    title: `新訂單 #${orderNumber}`,
+    message: `NT$${Number(total).toLocaleString('zh-TW')}，等待處理。`
+  })
   res.status(201).json({ id: result.insertId, order_number: orderNumber })
 }))
 
@@ -255,7 +512,32 @@ const buildContinuousHistory = (history, finalStage, cancelAtStage, backfillTime
   return targets.map(stage => ({ stage, time: known.get(stage) || backfillTime }))
 }
 
-app.put('/api/orders/:id', asyncRoute(async (req, res) => {
+app.post('/api/orders/:id/cancel', asyncRoute(async (req, res) => {
+  const { memberId, phone } = req.body
+  const [rows] = await db.query('SELECT id, order_number, member_id, phone, status, sub_status AS subStatus, status_history AS statusHistory FROM orders WHERE id = ?', [req.params.id])
+  const order = rows[0]
+  if (!order) return res.status(404).json({ message: '找不到訂單' })
+  const isOwner = order.member_id ? Number(order.member_id) === Number(memberId) : order.phone === phone
+  if (!isOwner) return res.status(403).json({ message: '無法取消此筆訂單' })
+  if (order.status !== 'pending') return res.status(400).json({ message: '訂單已進入處理流程，無法由客戶取消' })
+  let history = order.statusHistory
+  if (typeof history === 'string') { try { history = JSON.parse(history) } catch { history = [] } }
+  const cancelledAt = new Date().toISOString()
+  const finalHistory = buildContinuousHistory(Array.isArray(history) ? history : [], 'cancelled', order.subStatus, cancelledAt)
+  await db.query(
+    "UPDATE orders SET status = 'cancelled', sub_status = 'cancelled', cancelled_by = 'customer', status_history = ? WHERE id = ?",
+    [JSON.stringify(finalHistory), order.id]
+  )
+  await createOrderNotification({
+    orderId: order.id,
+    type: 'customer_cancelled',
+    title: `客戶已取消訂單 #${order.order_number}`,
+    message: '此訂單已由客戶取消。'
+  })
+  res.status(204).end()
+}))
+
+app.put('/api/orders/:id', ...requireRole('superadmin', 'admin', 'sales'), asyncRoute(async (req, res) => {
   const { status, sub_status: subStatus, remark, status_history: statusHistory } = req.body
   const [rows] = await db.query('SELECT sub_status AS subStatus, status, delivery_type AS deliveryType FROM orders WHERE id = ?', [req.params.id])
   const current = rows[0]
@@ -300,6 +582,7 @@ app.put('/api/orders/:id', asyncRoute(async (req, res) => {
   if (finalStatus !== undefined) { sets.push('status = ?'); values.push(finalStatus) }
   if (finalSubStatus !== undefined) { sets.push('sub_status = ?'); values.push(finalSubStatus) }
   if (finalHistory !== undefined) { sets.push('status_history = ?'); values.push(JSON.stringify(finalHistory)) }
+  if (finalSubStatus === 'cancelled') { sets.push("cancelled_by = 'admin'") }
   if (remark !== undefined) { sets.push('remark = ?'); values.push(remark) }
   if (!sets.length) return res.status(400).json({ message: '請提供要更新的欄位' })
   values.push(req.params.id)
@@ -307,7 +590,7 @@ app.put('/api/orders/:id', asyncRoute(async (req, res) => {
   res.status(204).end()
 }))
 
-app.delete('/api/orders/:id', asyncRoute(async (req, res) => {
+app.delete('/api/orders/:id', ...adminManagers(), asyncRoute(async (req, res) => {
   const [result] = await db.query('DELETE FROM orders WHERE id = ?', [req.params.id])
   if (!result.affectedRows) return res.status(404).json({ message: '找不到資料' })
   res.status(204).end()

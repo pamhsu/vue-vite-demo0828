@@ -93,9 +93,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { api } from '../../services/api'
 
+const route = useRoute()
 const orders = ref([])
 const allOrders = ref([])
 const subSelections = ref({})
@@ -202,7 +204,17 @@ const deleteOrder = async (id) => {
   await loadOrders()
 }
 
-onMounted(loadOrders)
+const applyNotificationOrder = (orderNumber) => {
+  if (!orderNumber) return
+  filters.value.orderNumber = String(orderNumber)
+  applyFilters()
+}
+
+onMounted(async () => {
+  if (route.query.order) filters.value.orderNumber = String(route.query.order)
+  await loadOrders()
+})
+watch(() => route.query.order, applyNotificationOrder)
 </script>
 
 <style scoped>

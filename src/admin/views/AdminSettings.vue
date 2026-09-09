@@ -64,7 +64,7 @@
       <div class="settings-card full-width">
         <h2>管理員帳號管理</h2>
         <div class="toolbar">
-          <button class="btn btn-primary" @click="showAddAdmin = true">新增管理員</button>
+          <button class="btn btn-primary" @click="openAddAdmin">新增管理員</button>
         </div>
         <div class="table-wrapper">
           <table class="data-table">
@@ -79,62 +79,73 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="a in admins" :key="a.username">
+              <tr v-for="a in admins" :key="a.id">
                 <td>{{ a.username }}</td>
                 <td>{{ a.name }}</td>
                 <td><span class="role-badge">{{ a.role }}</span></td>
-                <td>{{ a.lastLogin }}</td>
-                <td><span :class="['status-badge', a.status]">{{ a.statusText }}</span></td>
+                <td>{{ formatLastLogin(a.lastLoginAt) }}</td>
+                <td><button :class="['status-badge', a.status]" :disabled="!canManage(a)" @click="toggleAdminStatus(a)">{{ a.status === 'active' ? '啟用' : '停用' }}</button></td>
                 <td>
-                  <button class="icon-btn" title="編輯">✎</button>
-                  <button class="icon-btn danger" title="刪除">🗑</button>
+                  <button class="icon-btn" :disabled="!canManage(a)" title="編輯" @click="openEditAdmin(a)">✎</button>
+                  <button class="icon-btn danger" :disabled="!canManage(a)" title="刪除" @click="deleteAdmin(a)">🗑</button>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
 
-        <div v-if="showAddAdmin" class="modal-overlay" @click.self="closeAdminModal">
+        <div v-if="showAddAdmin" class="modal-overlay">
           <div class="modal">
-            <h3>新增管理員</h3>
+            <div class="modal-header">
+              <h3>{{ editingAdmin ? '編輯管理員' : '新增管理員' }}</h3>
+              <button type="button" class="close-modal" aria-label="關閉新增管理員視窗" @click="requestCloseAdminModal">×</button>
+            </div>
             <form @submit.prevent="saveAdmin">
               <div class="form-row">
                 <div class="form-group">
                   <label>帳號</label>
-                  <input type="text" v-model="adminForm.username" required />
+                  <input type="text" v-model.trim="adminForm.username" :readonly="Boolean(editingAdmin)" required />
                 </div>
                 <div class="form-group">
                   <label>姓名</label>
-                  <input type="text" v-model="adminForm.name" required />
+                  <input type="text" v-model.trim="adminForm.name" required />
                 </div>
               </div>
               <div class="form-row">
                 <div class="form-group">
                   <label>Email</label>
-                  <input type="email" v-model="adminForm.email" required />
+                  <input type="email" v-model.trim="adminForm.email" required />
                 </div>
                 <div class="form-group">
                   <label>角色</label>
                   <select v-model="adminForm.role" required>
-                    <option value="superadmin">超級管理員</option>
+                    <option v-if="currentAdmin.role === 'superadmin'" value="superadmin">超級管理員</option>
                     <option value="admin">管理員</option>
-                    <option value="editor">編輯</option>
+                    <option value="sales">業務／訂單人員</option>
                   </select>
                 </div>
               </div>
               <div class="form-row">
                 <div class="form-group">
-                  <label>密碼</label>
-                  <input type="password" v-model="adminForm.password" required minlength="8" />
+                  <label>{{ editingAdmin ? '新密碼（不修改可留白）' : '密碼' }}</label>
+                  <input type="password" v-model="adminForm.password" :required="!editingAdmin" minlength="6" />
                 </div>
                 <div class="form-group">
-                  <label>確認密碼</label>
-                  <input type="password" v-model="adminForm.confirmPassword" required />
+                  <label>{{ editingAdmin ? '確認新密碼' : '確認密碼' }}</label>
+                  <input type="password" v-model="adminForm.confirmPassword" :required="Boolean(adminForm.password)" />
                 </div>
               </div>
+              <div v-if="editingAdmin" class="form-group">
+                <label>帳號狀態</label>
+                <select v-model="adminForm.status">
+                  <option value="active">啟用</option>
+                  <option value="inactive">停用</option>
+                </select>
+              </div>
+              <p v-if="adminError" class="form-error">{{ adminError }}</p>
               <div class="modal-actions">
-                <button type="button" class="btn btn-secondary" @click="closeAdminModal">取消</button>
-                <button type="submit" class="btn btn-primary">新增</button>
+                <button type="button" class="btn btn-secondary" @click="requestCloseAdminModal">取消</button>
+                <button type="submit" class="btn btn-primary" :disabled="isSavingAdmin">{{ isSavingAdmin ? '儲存中…' : (editingAdmin ? '儲存修改' : '新增') }}</button>
               </div>
             </form>
           </div>
@@ -145,7 +156,8 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
+import { api } from '../../services/api'
 
 const site = ref({
   name: 'FATTA A MANO',
@@ -162,22 +174,45 @@ const theme = ref({
   accent: '#693335'
 })
 
-const admins = ref([
-  { username: 'admin', name: '最高管理員', role: 'superadmin', lastLogin: '2024-01-20 14:30', status: 'active', statusText: '啟用' },
-  { username: 'manager', name: '店務主管', role: 'admin', lastLogin: '2024-01-19 09:15', status: 'active', statusText: '啟用' },
-  { username: 'editor', name: '內容編輯', role: 'editor', lastLogin: '2024-01-18 16:45', status: 'inactive', statusText: '停用' },
-])
+const admins = ref([])
+const currentAdmin = ref({})
+try { currentAdmin.value = JSON.parse(localStorage.getItem('adminUser') || '{}') } catch { currentAdmin.value = {} }
 
 const showAddAdmin = ref(false)
+const editingAdmin = ref(null)
+const isSavingAdmin = ref(false)
+const adminError = ref('')
+const originalAdminForm = ref('')
 
-const adminForm = ref({
+const emptyAdminForm = () => ({
   username: '',
   name: '',
   email: '',
   role: 'admin',
+  status: 'active',
   password: '',
   confirmPassword: ''
 })
+
+const adminForm = ref(emptyAdminForm())
+const loadAdmins = async () => { admins.value = await api('/admins') }
+const formatLastLogin = (value) => value ? new Date(value).toLocaleString('zh-TW') : '從未登入'
+const canManage = (admin) => currentAdmin.value.role === 'superadmin' || admin.role !== 'superadmin'
+const openAddAdmin = () => {
+  editingAdmin.value = null
+  adminError.value = ''
+  adminForm.value = emptyAdminForm()
+  originalAdminForm.value = JSON.stringify(adminForm.value)
+  showAddAdmin.value = true
+}
+const openEditAdmin = (admin) => {
+  if (!canManage(admin)) return
+  editingAdmin.value = admin
+  adminError.value = ''
+  adminForm.value = { username: admin.username, name: admin.name, email: admin.email, role: admin.role, status: admin.status, password: '', confirmPassword: '' }
+  originalAdminForm.value = JSON.stringify(adminForm.value)
+  showAddAdmin.value = true
+}
 
 const saveSite = () => {
   alert('網站基本資料已儲存（需串接 API）')
@@ -187,27 +222,61 @@ const saveTheme = () => {
   alert('主題色彩已儲存（需重新載入套用）')
 }
 
-const saveAdmin = () => {
+const saveAdmin = async () => {
+  adminError.value = ''
   if (adminForm.value.password !== adminForm.value.confirmPassword) {
-    alert('兩次密碼不一致')
+    adminError.value = '兩次密碼不一致'
     return
   }
-  admins.value.push({
-    username: adminForm.value.username,
-    name: adminForm.value.name,
-    role: adminForm.value.role,
-    lastLogin: '從未登入',
-    status: 'active',
-    statusText: '啟用'
-  })
-  closeAdminModal()
-  alert('管理員已新增')
+  isSavingAdmin.value = true
+  try {
+    const isEditing = Boolean(editingAdmin.value)
+    const body = { ...adminForm.value }
+    delete body.confirmPassword
+    if (isEditing) await api(`/admins/${editingAdmin.value.id}`, { method: 'PUT', body: JSON.stringify(body) })
+    else await api('/admins', { method: 'POST', body: JSON.stringify(body) })
+    await loadAdmins()
+    closeAdminModal()
+    alert(isEditing ? '管理員資料已更新' : '管理員已新增')
+  } catch (error) {
+    adminError.value = error.message || '儲存管理員資料失敗'
+  } finally {
+    isSavingAdmin.value = false
+  }
+}
+
+const toggleAdminStatus = async (admin) => {
+  if (!canManage(admin)) return
+  try {
+    await api(`/admins/${admin.id}`, { method: 'PUT', body: JSON.stringify({ ...admin, status: admin.status === 'active' ? 'inactive' : 'active', password: '' }) })
+    await loadAdmins()
+  } catch (error) { alert(error.message) }
+}
+
+const deleteAdmin = async (admin) => {
+  if (!canManage(admin) || !confirm(`確定要刪除管理員「${admin.username}」嗎？`)) return
+  try {
+    await api(`/admins/${admin.id}`, { method: 'DELETE' })
+    await loadAdmins()
+  } catch (error) { alert(error.message) }
 }
 
 const closeAdminModal = () => {
   showAddAdmin.value = false
-  adminForm.value = { username: '', name: '', email: '', role: 'admin', password: '', confirmPassword: '' }
+  editingAdmin.value = null
+  adminError.value = ''
+  adminForm.value = emptyAdminForm()
+  originalAdminForm.value = JSON.stringify(adminForm.value)
 }
+
+const requestCloseAdminModal = () => {
+  const hasUnsavedInput = JSON.stringify(adminForm.value) !== originalAdminForm.value
+
+  if (hasUnsavedInput && !confirm('尚未儲存新增管理員資料，確定要關閉嗎？')) return
+  closeAdminModal()
+}
+
+onMounted(() => loadAdmins().catch((error) => { adminError.value = error.message || '無法載入管理員資料' }))
 </script>
 
 <style scoped>
@@ -384,9 +453,11 @@ const closeAdminModal = () => {
 .status-badge {
   display: inline-block;
   padding: 4px 10px;
+  border: 0;
   border-radius: 20px;
   font-size: 12px;
   font-weight: 600;
+  cursor: pointer;
 }
 
 .status-badge.active {
@@ -443,10 +514,46 @@ const closeAdminModal = () => {
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
 }
 
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.status-badge:disabled,
+.icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.form-error {
+  margin: 0 0 14px;
+  color: #b91c1c;
+  font-size: 14px;
+}
+
 .modal h3 {
-  margin: 0 0 20px;
+  margin: 0;
   font-size: 20px;
   font-weight: 700;
+  color: #273746;
+}
+
+.close-modal {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.close-modal:hover {
+  background: #f1f5f9;
   color: #273746;
 }
 
