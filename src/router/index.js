@@ -65,7 +65,7 @@ const routes = [
   path: "/admin/login",
   name: "adminLogin",
   component: () => import("../admin/views/AdminLogin.vue"),
-  meta: { layout: "default" }
+  meta: { layout: "admin-login" }
 },
   {
     path: "/admin",
