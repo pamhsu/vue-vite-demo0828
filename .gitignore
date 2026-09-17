@@ -12,7 +12,12 @@ dist
 dist-ssr
 *.local
 .env
-/public/uploads/
+/public/uploads/*
+!/public/uploads/.htaccess
+/public/api/config.local.php
+/byethost-deploy.zip
+/byethost-images-*.zip
+/.byethost-package/
 
 # Editor directories and files
 .vscode/*

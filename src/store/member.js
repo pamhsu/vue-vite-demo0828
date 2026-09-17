@@ -1,9 +1,10 @@
 import { defineStore } from "pinia";
+import { memberAuthHeaders, storedMember } from "../services/memberAuth.js";
 
 export const useMemberStore =
     defineStore("member", {
         state: () => ({
-            user: JSON.parse(localStorage.getItem("member")) || null,
+            user: storedMember(),
             members: JSON.parse(localStorage.getItem("members")) || []
         }),
         getters: {
@@ -33,17 +34,23 @@ export const useMemberStore =
                 const data = await response.json()
                 if (!response.ok) return { success: false, disabled: !!data.disabled, message: data.message || '帳號或密碼錯誤' }
                 this.user = data.member
+                localStorage.setItem("memberToken", data.token)
                 localStorage.setItem("member", JSON.stringify(this.user))
                 return { success: true, message: "登入成功" }
             },
             logout() {
+                fetch('/api/auth/logout', {
+                    method: 'POST',
+                    headers: memberAuthHeaders()
+                }).catch(() => {})
                 this.user = null
                 localStorage.removeItem("member")
+                localStorage.removeItem("memberToken")
             },
             async updateProfile(payload) {
                 const response = await fetch(`/api/me/${this.user.id}`, {
                     method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: memberAuthHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify(payload)
                 })
                 if (!response.ok) {
@@ -57,7 +64,7 @@ export const useMemberStore =
             async changePassword(oldPassword, newPassword) {
                 const response = await fetch(`/api/me/${this.user.id}/password`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: memberAuthHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ oldPassword, newPassword })
                 })
                 if (!response.ok) {

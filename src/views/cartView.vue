@@ -1,6 +1,7 @@
 <script>
 import { useCartStore, optionsPrice } from "../store/cart.js"
 import { useMemberStore } from "../store/member.js"
+import { memberAuthHeaders } from "../services/memberAuth.js"
 
 export default {
   data() {
@@ -83,7 +84,7 @@ export default {
       try {
         const response = await fetch("/api/orders", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: memberAuthHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({
             name: this.name,
             phone: this.phone,

@@ -1,5 +1,6 @@
 <script>
 import { useMemberStore } from "../store/member.js"
+import { memberAuthHeaders } from "../services/memberAuth.js"
 
 export default {
   data() {
@@ -73,7 +74,7 @@ export default {
       try {
         const response = await fetch(`/api/orders/${this.selectedOrder.id}/cancel`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: memberAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ memberId: this.member?.id, phone: this.selectedOrder.phone })
         })
         if (!response.ok) {
@@ -130,7 +131,9 @@ export default {
       this.errMsg = ""
       this.loaded = true
       try {
-        const response = await fetch(`/api/orders/member/${this.member.id}`)
+        const response = await fetch(`/api/orders/member/${this.member.id}`, {
+          headers: memberAuthHeaders()
+        })
         const data = await response.json()
         if (!response.ok) throw new Error(data.message || '查詢失敗')
         this.orders = data.map(this.parseOrder)

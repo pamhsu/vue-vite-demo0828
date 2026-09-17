@@ -28,7 +28,7 @@ export default{
     <header v-if="showStoreNavbar" class="navbar">
       <div class="navbar-inner">
         <div class="nav-brand-wrap">
-          <img src="../public/images/pizzalogo.png" alt="Logo" class="nav-logo" />
+          <img src="/images/pizzalogo.png" alt="Logo" class="nav-logo" />
           <strong class="nav-brand">
             FATTA A MANO
           </strong>

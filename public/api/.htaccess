@@ -1,0 +1,7 @@
+Options -Indexes
+
+# Only index.php is a public endpoint. Configuration and helper files must
+# never be downloadable, even if PHP is temporarily misconfigured.
+<FilesMatch "^(?!index\.php$).*\.php$">
+  Require all denied
+</FilesMatch>
